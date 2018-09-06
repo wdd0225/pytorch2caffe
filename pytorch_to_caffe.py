@@ -27,10 +27,12 @@ class TransLog(object):
         doing init() with inputs Variable before using it
         """
         self.layers={}
+        self.detail_layers={}  
+        self.detail_blobs={}  
         self._blobs={}
         self._blobs_data=[]
         self.cnet=caffe_net.Caffemodel('')
-        self.debug=False
+        self.debug=True
 
     def init(self,inputs):
         """
@@ -40,7 +42,10 @@ class TransLog(object):
     def add_layer(self,name='layer'):
         if name in self.layers:
             return self.layers[name]
-        name='{}{}'.format(name,len(self.layers))
+        if name not in self.detail_layers.keys():
+            self.detail_layers[name] =0
+        self.detail_layers[name] +=1
+        name='{}{}'.format(name,self.detail_layers[name])
         self.layers[name]=name
         if self.debug:
             print("{} was added to layers".format(self.layers[name]))
@@ -51,8 +56,11 @@ class TransLog(object):
         for blob in blobs:
             self._blobs_data.append(blob) # to block the memory address be rewrited
             blob=int(id(blob))
+            if name not in self.detail_blobs.keys():
+                self.detail_blobs[name] =0
+            self.detail_blobs[name] +=1           
             if with_num:
-                rst.append('{}{}'.format(name,len(self._blobs)))
+                rst.append('{}{}'.format(name,self.detail_blobs[name]))
             else:
                 rst.append('{}'.format(name))
             if self.debug:
@@ -114,6 +122,7 @@ def _split(raw,tensor, split_size, dim=0):
     log.cnet.add_layer(layer)
     return x
 
+
 def _pool(type,raw,input,x,kernel_size,stride,padding,ceil_mode):
     # TODO dilation,ceil_mode,return indices
     layer_name = log.add_layer(name='{}_pool'.format(type))
@@ -131,6 +140,7 @@ def _pool(type,raw,input,x,kernel_size,stride,padding,ceil_mode):
         if oheight!=0 or owidth!=0:
             caffe_out=raw(input, kernel_size, stride, padding, ceil_mode=True)
             print("WARNING: the output shape miss match at {}: "
+            
                   "input {} output---Pytorch:{}---Caffe:{}\n"
                   "This is caused by the different implementation that ceil mode in caffe and the floor mode in pytorch.\n"
                   "You can add the clip layer in caffe prototxt manually if shape mismatch error is caused in caffe. ".format(layer_name,input.size(),x.size(),caffe_out.size()))
@@ -163,8 +173,8 @@ def _max(raw,*args):
         log.cnet.add_layer(layer)
     return x
 
-def _cat(raw,inputs, dimension=0):
-    x=raw(inputs, dimension)
+def _cat(raw,inputs, dim=0):
+    x=raw(inputs, dim)
     bottom_blobs=[]
     for input in inputs:
         bottom_blobs.append(log.blobs(input))
@@ -172,7 +182,7 @@ def _cat(raw,inputs, dimension=0):
     top_blobs=log.add_blobs([x],name='cat_blob')
     layer=caffe_net.Layer_param(name=layer_name,type='Concat',
                                 bottom=bottom_blobs,top=top_blobs)
-    layer.param.concat_param.axis =dimension
+    layer.param.concat_param.axis =dim
     log.cnet.add_layer(layer)
     return x
 
@@ -192,10 +202,11 @@ def _threshold(raw,input, threshold, value, inplace=False):
     # for threshold or relu
     if threshold==0 and value==0:
         x = raw(input,threshold, value, inplace)
+        bottom_blobs=[log.blobs(input)]
         name = log.add_layer(name='relu')
         log.add_blobs([x], name='relu_blob')
         layer = caffe_net.Layer_param(name=name, type='ReLU',
-                                      bottom=[log.blobs(input)], top=[log.blobs(x)])
+                                      bottom=bottom_blobs, top=[log.blobs(x)])
         log.cnet.add_layer(layer)
         return x
     if value!=0:
@@ -213,10 +224,11 @@ def _threshold(raw,input, threshold, value, inplace=False):
 def _prelu(raw, input, weight):
     # for threshold or prelu
     x = raw(input, weight)
+    bottom_blobs=[log.blobs(input)]
     name = log.add_layer(name='prelu')
     log.add_blobs([x], name='prelu_blob')
     layer = caffe_net.Layer_param(name=name, type='PReLU',
-                                  bottom=[log.blobs(input)], top=[log.blobs(x)])
+                                  bottom=bottom_blobs, top=[log.blobs(x)])
     if weight.size()[0]==1:
         layer.param.prelu_param.channel_shared=True
         layer.add_data(weight.cpu().data.numpy()[0])
@@ -230,10 +242,11 @@ def _softmax(raw, input, dim=None, _stacklevel=3):
     x=raw(input, dim=dim)
     if dim is None:
         dim=F._get_softmax_dim('softmax', input.dim(), _stacklevel)
+    bottom_blobs=[log.blobs(input)]
     name = log.add_layer(name='softmax')
     log.add_blobs([x], name='softmax_blob')
     layer = caffe_net.Layer_param(name=name, type='Softmax',
-                                  bottom=[log.blobs(input)], top=[log.blobs(x)])
+                                  bottom=bottom_blobs, top=[log.blobs(x)])
     layer.param.softmax_param.axis=dim
     log.cnet.add_layer(layer)
     return x
@@ -255,7 +268,7 @@ def _batch_norm(raw,input, running_mean, running_var, weight=None, bias=None,
     log.cnet.add_layer(layer1)
     layer_name2 = log.add_layer(name='bn_scale')
     layer2 = caffe_net.Layer_param(name=layer_name2, type='Scale',
-                                   bottom=top_blobs, top=top_blobs)
+                                   bottom=top_blobs, top=top_blobs)#top_blobs
     layer2.param.scale_param.bias_term = True
     layer2.add_data(weight.cpu().data.numpy(), bias.cpu().data.numpy())
     log.cnet.add_layer(layer2)
@@ -383,6 +396,7 @@ F.softmax=Rp(F.softmax,_softmax)
 torch.split=Rp(torch.split,_split)
 torch.max=Rp(torch.max,_max)
 torch.cat=Rp(torch.cat,_cat)
+
 
 # TODO: other types of the view function
 try:

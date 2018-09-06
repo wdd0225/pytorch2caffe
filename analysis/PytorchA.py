@@ -15,7 +15,8 @@ def _analyse(module,raw_input):
     for i in raw_input:
         s = i.size()
         if len(s)==4:
-            input.append(Blob([s[0],s[2],s[3],s[1]]))
+            #input.append(Blob([s[0],s[2],s[3],s[1]]))
+            input.append(Blob([s[0],s[1],s[2],s[3]]))
         else:
             input.append(Blob(s))
     out=None
